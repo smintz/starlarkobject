@@ -33,7 +33,8 @@ obj.other_func()
 
 WithSuperClass = object("WithSuperClass", SimpleObject)
 s = WithSuperClass()
-print(obj, s)
+s.other_func()
+
 `
 
 	thread := &starlark.Thread{

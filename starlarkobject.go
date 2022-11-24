@@ -29,8 +29,13 @@ func (o *Object) Truth() starlark.Bool {
 func (o *Object) Hash() (uint32, error) {
 	return 0, fmt.Errorf("not hashable")
 }
-func (o *Object) Attr(name string) (starlark.Value, error) { return o.Members[name], nil }
-func (o *Object) AttrNames() []string                      { return append(o.Members.Keys(), o.Super.AttrNames()...) }
+func (o *Object) Attr(name string) (starlark.Value, error) {
+	if value, ok := o.Members[name]; ok {
+		return value, nil
+	}
+	return o.Super.Attr(name)
+}
+func (o *Object) AttrNames() []string { return append(o.Members.Keys(), o.Super.AttrNames()...) }
 func (o *Object) SetField(name string, val starlark.Value) error {
 
 	o.Members[name] = val
@@ -216,10 +221,15 @@ func (s *Super) AttrNames() []string {
 }
 
 func (s *Super) Attr(name string) (starlark.Value, error) {
-	if value, ok := s.value.(starlark.HasAttrs); ok {
-		return value.Attr(name)
-	}
-	return nil, fmt.Errorf("%s (type: %s) is no attribute named `%s`", s.value.String(), s.value.Type(), name)
+	var returnValue starlark.Value
+	err := s.valueOrSuper(func(v starlark.Value) error {
+		e := fmt.Errorf("cannot find field %s", name)
+		if v, ok := s.value.(starlark.HasAttrs); ok {
+			returnValue, e = v.Attr(name)
+		}
+		return e
+	})
+	return returnValue, err
 }
 
 func (s *Super) SetField(name string, val starlark.Value) error {

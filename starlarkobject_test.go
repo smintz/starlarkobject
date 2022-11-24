@@ -9,7 +9,6 @@ import (
 
 func ExampleStarlarkObject() {
 	const data = `
-
 def __init__(self, new_attr="hi"):
 	"""initial doc"""
 	self.new_attr=new_attr
@@ -24,13 +23,17 @@ def test(self):
 	print(self.new_attr)
 
 SimpleObject = object("SimpleObject",
-	__init__=__init__,
-	test=test,
-	other_func=other_func,
+	__init__,
+	test,
+	other_func,
 	str="hello"
 )
 obj = SimpleObject("shahar")
 obj.other_func()
+
+WithSuperClass = object("WithSuperClass", SimpleObject)
+s = WithSuperClass()
+print(obj, s)
 `
 
 	thread := &starlark.Thread{

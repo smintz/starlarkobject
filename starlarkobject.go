@@ -2,7 +2,6 @@ package starlarkobject
 
 import (
 	"fmt"
-	"strings"
 
 	"go.starlark.net/starlark"
 )
@@ -10,12 +9,13 @@ import (
 type Object struct {
 	Name    string
 	Members starlark.StringDict
+	Super   *Super
 }
 
 var _ starlark.Value = (*Object)(nil)
 
 func (o *Object) String() string {
-	return fmt.Sprintf("%s(%s)", o.Name, strings.Join(o.AttrNames(), ", "))
+	return fmt.Sprintf("%s(%v)", o.Name, o.AttrNames())
 }
 
 func (o *Object) Type() string {
@@ -30,8 +30,9 @@ func (o *Object) Hash() (uint32, error) {
 	return 0, fmt.Errorf("not hashable")
 }
 func (o *Object) Attr(name string) (starlark.Value, error) { return o.Members[name], nil }
-func (o *Object) AttrNames() []string                      { return o.Members.Keys() }
+func (o *Object) AttrNames() []string                      { return append(o.Members.Keys(), o.Super.AttrNames()...) }
 func (o *Object) SetField(name string, val starlark.Value) error {
+
 	o.Members[name] = val
 	return nil
 }
@@ -40,14 +41,28 @@ func (o *Object) Freeze() { o.Members.Freeze() }
 
 func MakeObject(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, nil, 1, &name); err != nil {
-		return nil, err
-	}
-	obj := &Object{Name: name}
+
+	_ = starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &name)
+
+	obj := &Object{Name: name, Super: &Super{}}
 	members := make(starlark.StringDict, len(kwargs))
+
+	for _, item := range args[1:] {
+		if f, ok := item.(*starlark.Function); ok {
+			members[f.Name()] = &function{object: obj, name: f.Name(), function: f}
+			continue
+		}
+		if callable, ok := item.(starlark.Callable); ok {
+			callableItem, err := callable.CallInternal(thread, args, kwargs)
+			if err != nil {
+				return nil, err
+			}
+			obj.Super = &Super{value: callableItem, super: obj.Super}
+		}
+	}
 	for _, kwarg := range kwargs {
 		k := string(kwarg[0].(starlark.String))
-		f, ok := kwarg[1].(starlark.Callable)
+		f, ok := kwarg[1].(*starlark.Function)
 		if ok {
 			members[k] = &function{object: obj, name: k, function: f}
 		} else {
@@ -100,4 +115,118 @@ func (ob *objectInit) CallInternal(thread *starlark.Thread, args starlark.Tuple,
 		}
 	}
 	return ob.object, nil
+}
+
+type Super struct {
+	value starlark.Value
+	super starlark.Value
+}
+
+func (s *Super) String() string {
+	var returnValue string
+	s.valueOrSuper(func(v starlark.Value) error {
+		returnValue = v.String()
+		return nil
+	})
+	return returnValue
+}
+func (s *Super) Type() string {
+	var returnValue string
+	s.valueOrSuper(func(v starlark.Value) error {
+		returnValue = v.Type()
+		return nil
+	})
+	return returnValue
+}
+func (s *Super) Truth() starlark.Bool {
+	var returnValue starlark.Bool
+	s.valueOrSuper(
+		func(v starlark.Value) error {
+			returnValue = v.Truth()
+			return nil
+		},
+	)
+	return returnValue
+}
+
+func (s *Super) Freeze() {
+	s.value.Freeze()
+	s.super.Freeze()
+}
+
+func (s *Super) Hash() (uint32, error) {
+	var returnValue uint32
+	var err error
+	err = s.valueOrSuper(func(v starlark.Value) error {
+		returnValue, err = v.Hash()
+		return err
+	})
+	return returnValue, err
+}
+
+func (s *Super) valueOrSuper(f func(starlark.Value) error) error {
+	err := f(s.value)
+	if err == nil {
+		return nil
+	}
+	if s.super == nil {
+		return nil
+	}
+	return f(s.super)
+}
+
+func (s *Super) valueThenSuper(f func(starlark.Value) error) error {
+	if s.value == nil {
+		return nil
+	}
+	err := f(s.value)
+	if err != nil {
+		return err
+	}
+	if s.super == nil {
+		return nil
+	}
+	return f(s.super)
+}
+
+func (s *Super) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var returnValue starlark.Value
+	err := s.valueOrSuper(func(v starlark.Value) error {
+		var e error
+		if val, ok := v.(starlark.Callable); ok {
+			returnValue, e = val.CallInternal(thread, args, kwargs)
+		}
+		return e
+	})
+	return returnValue, err
+}
+
+func (s *Super) AttrNames() []string {
+	var returnValue []string
+	s.valueThenSuper(func(v starlark.Value) error {
+		if v == nil {
+			return fmt.Errorf("got nil")
+		}
+		if value, ok := v.(starlark.HasAttrs); ok {
+			returnValue = append(returnValue, value.AttrNames()...)
+		}
+		return nil
+	})
+	return returnValue
+}
+
+func (s *Super) Attr(name string) (starlark.Value, error) {
+	if value, ok := s.value.(starlark.HasAttrs); ok {
+		return value.Attr(name)
+	}
+	return nil, fmt.Errorf("%s (type: %s) is no attribute named `%s`", s.value.String(), s.value.Type(), name)
+}
+
+func (s *Super) SetField(name string, val starlark.Value) error {
+	return s.valueOrSuper(func(v starlark.Value) error {
+		if obj, ok := v.(starlark.HasSetField); ok {
+			return obj.SetField(name, val)
+		}
+		return fmt.Errorf("SetField not implemented for %s", v.Type())
+	})
 }

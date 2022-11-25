@@ -270,3 +270,62 @@ print(MyClass())
 		})
 	}
 }
+
+func TestObject_Truth(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "bool_is_true.star",
+			code: `
+def __bool__(self):
+	return True
+
+MyClass = object("MyClass", __bool__)
+print("x") if MyClass() else print("y")
+			`,
+			want:    []string{`x`},
+			wantErr: false,
+		},
+		{
+			name: "bool_is_false.star",
+			code: `
+def __bool__(self):
+	return False
+
+MyClass = object("MyClass", __bool__)
+print("x") if MyClass() else print("y")
+			`,
+			want:    []string{`y`},
+			wantErr: false,
+		},
+		{
+			name: "bool_from_supper.star",
+			code: `
+def __bool__(self):
+	return True
+
+MyClass = object("MyClass", __bool__)
+MySubClass = object("MySubClass", MyClass)
+print("x") if MySubClass() else print("y")
+			`,
+			want:    []string{`y`},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := starlarkHelper(tt.code, tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Object.Attr() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Object.Attr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

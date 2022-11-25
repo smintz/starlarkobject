@@ -42,7 +42,13 @@ func (o *Object) Type() string {
 }
 
 func (o *Object) Truth() starlark.Bool {
-	return starlark.False
+	returnValue, err := o.caller("__bool__", starlark.Tuple{}, []starlark.Tuple{})
+	if err == nil {
+		if boolValue, ok := returnValue.(starlark.Bool); ok {
+			return boolValue
+		}
+	}
+	return o.Super.Truth()
 }
 
 func (o *Object) Hash() (uint32, error) {

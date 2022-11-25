@@ -10,11 +10,30 @@ type Object struct {
 	Name    string
 	Members starlark.StringDict
 	Super   *Super
+	thread  *starlark.Thread
 }
 
 var _ starlark.Value = (*Object)(nil)
 
+func (o *Object) caller(funcName string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	attr, err := o.Attr(funcName)
+	if err != nil {
+		return attr, err
+	}
+	if attr == nil {
+		return nil, fmt.Errorf("%s does not exists in %v", funcName, o.Name) // Must use o.Name to avoid calling o.String() which calls o.caller(...) again
+	}
+	if callable, ok := attr.(*function); ok {
+		return callable.CallInternal(o.thread, args, kwargs)
+	}
+	return nil, fmt.Errorf("%s in %v is not a function", funcName, o.Name)
+}
+
 func (o *Object) String() string {
+	returnValue, err := o.caller("__str__", starlark.Tuple{}, []starlark.Tuple{})
+	if err == nil {
+		return returnValue.String()
+	}
 	return fmt.Sprintf("%s(%v)", o.Name, o.AttrNames())
 }
 
@@ -29,34 +48,53 @@ func (o *Object) Truth() starlark.Bool {
 func (o *Object) Hash() (uint32, error) {
 	return 0, fmt.Errorf("not hashable")
 }
+
 func (o *Object) Attr(name string) (starlark.Value, error) {
 	if value, ok := o.Members[name]; ok {
 		return value, nil
 	}
 	return o.Super.Attr(name)
 }
-func (o *Object) AttrNames() []string { return append(o.Members.Keys(), o.Super.AttrNames()...) }
-func (o *Object) SetField(name string, val starlark.Value) error {
-
-	o.Members[name] = val
+func (o *Object) AttrNames() []string {
+	returnValue := append(o.Members.Keys(), o.Super.AttrNames()...)
+	return returnValue
+}
+func (o *Object) SetField(name string, value starlark.Value) error {
+	if _, ok := o.Members[name]; ok {
+		o.Members[name] = value
+		return nil
+	}
+	if current, _ := o.Super.Attr(name); current != nil {
+		return o.Super.SetField(name, value)
+	}
+	o.Members[name] = value
 	return nil
+
 }
 
-func (o *Object) Freeze() { o.Members.Freeze() }
+func (o *Object) Freeze() {
+	o.Members.Freeze()
+	if o.Super != nil {
+		o.Super.Freeze()
+	}
+}
 
 func MakeObject(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 
 	_ = starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &name)
 
-	obj := &Object{Name: name, Super: &Super{}}
+	obj := &Object{Name: name, Super: &Super{}, thread: thread}
 	members := make(starlark.StringDict, len(kwargs))
 
 	for _, item := range args[1:] {
+		// if an arg is a function, we will add it as attribute to our object
 		if f, ok := item.(*starlark.Function); ok {
 			members[f.Name()] = &function{object: obj, name: f.Name(), function: f}
 			continue
 		}
+
+		// if an arg is callable, we assume its our super object
 		if callable, ok := item.(starlark.Callable); ok {
 			callableItem, err := callable.CallInternal(thread, args, kwargs)
 			if err != nil {
@@ -155,8 +193,12 @@ func (s *Super) Truth() starlark.Bool {
 }
 
 func (s *Super) Freeze() {
-	s.value.Freeze()
-	s.super.Freeze()
+	if s.value != nil {
+		s.value.Freeze()
+	}
+	if s.super != nil {
+		s.super.Freeze()
+	}
 }
 
 func (s *Super) Hash() (uint32, error) {
@@ -194,18 +236,6 @@ func (s *Super) valueThenSuper(f func(starlark.Value) error) error {
 	return f(s.super)
 }
 
-func (s *Super) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var returnValue starlark.Value
-	err := s.valueOrSuper(func(v starlark.Value) error {
-		var e error
-		if val, ok := v.(starlark.Callable); ok {
-			returnValue, e = val.CallInternal(thread, args, kwargs)
-		}
-		return e
-	})
-	return returnValue, err
-}
-
 func (s *Super) AttrNames() []string {
 	var returnValue []string
 	s.valueThenSuper(func(v starlark.Value) error {
@@ -235,8 +265,10 @@ func (s *Super) Attr(name string) (starlark.Value, error) {
 func (s *Super) SetField(name string, val starlark.Value) error {
 	return s.valueOrSuper(func(v starlark.Value) error {
 		if obj, ok := v.(starlark.HasSetField); ok {
-			return obj.SetField(name, val)
+			if _, err := obj.Attr(name); err == nil {
+				return obj.SetField(name, val)
+			}
 		}
-		return fmt.Errorf("SetField not implemented for %s", v.Type())
+		return fmt.Errorf("SetField not implemented for %s", val.Type())
 	})
 }

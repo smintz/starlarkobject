@@ -3,11 +3,13 @@ package starlarkobject
 import (
 	"fmt"
 	"log"
+	"reflect"
+	"testing"
 
 	"go.starlark.net/starlark"
 )
 
-func ExampleStarlarkObject() {
+func ExampleObject() {
 	const data = `
 def __init__(self, new_attr="hi"):
 	"""initial doc"""
@@ -33,7 +35,7 @@ obj.other_func()
 
 WithSuperClass = object("WithSuperClass", SimpleObject)
 s = WithSuperClass()
-s.other_func()
+s.test()
 
 `
 
@@ -64,6 +66,207 @@ s.other_func()
 		fmt.Printf("%s (%s) = %s\n", name, v.Type(), v.String())
 	}
 	// Output:
+	// hello
+	// world
+	// shahar
+	// world
+	// shahar
+	//
 	// Globals:
-	// obj (object) = obj(hello)
+	// SimpleObject (object) = ()
+	// WithSuperClass (object) = ()
+	// __init__ (function) = <function __init__>
+	// obj () = ([__init__ new_attr other_func str test])
+	// other_func (function) = <function other_func>
+	// s () = ([__init__ new_attr other_func str test])
+	// test (function) = <function test>
+}
+
+func starlarkHelper(input, filename string) ([]string, starlark.StringDict, error) {
+	var output []string
+	thread := &starlark.Thread{
+		Name: "example",
+		Print: func(_ *starlark.Thread, msg string) {
+			output = append(output, msg)
+		},
+	}
+
+	predeclared := starlark.StringDict{
+		"object": starlark.NewBuiltin("object", MakeObject),
+	}
+
+	// Execute a program.
+	globals, err := starlark.ExecFile(thread, filename, input, predeclared)
+	return output, globals, err
+}
+
+func TestObject_Attr(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "get_attr.star",
+			code: `
+MyClass = object("MyClass", attr=0)
+obj = MyClass()
+print(obj.attr)
+			`,
+			want:    []string{"0"},
+			wantErr: false,
+		},
+		{
+			name: "get_attr_super.star",
+			code: `
+MyClass = object("MyClass", attr=0)
+MySubClass = object("MySubClass", MyClass)
+obj=MySubClass()
+print(obj.attr)
+			`,
+			want:    []string{"0"},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := starlarkHelper(tt.code, tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Object.Attr() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Object.Attr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestObject_SetField(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "reset_field.star",
+			code: `
+MyClass = object("MyClass", attr=0)
+obj = MyClass()
+obj.attr=1
+print(obj.attr)
+			`,
+			want:    []string{"1"},
+			wantErr: false,
+		},
+		{
+			name: "reset_super_field.star",
+			code: `
+def print_attr(self):
+	print(self.attr)
+MyClass = object("MyClass", print_attr, attr=0)
+MySubClass = object("MySubClass", MyClass)
+obj=MySubClass()
+obj.attr=1
+obj.print_attr()
+			`,
+			want:    []string{"1"},
+			wantErr: false,
+		},
+		{
+			name: "set_unknown_field.star",
+			code: `
+MyClass = object("MyClass")
+obj=MyClass()
+obj.attr=1
+print(obj.attr)
+			`,
+			want:    []string{"1"},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := starlarkHelper(tt.code, tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Object.Attr() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Object.Attr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestObject_String(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "str_formatting.star",
+			code: `
+def __str__(self):
+	return self.attr
+
+MyClass = object("MyClass", __str__, attr=0)
+print(MyClass())
+			`,
+			want:    []string{`0`},
+			wantErr: false,
+		},
+		{
+			name: "str_formatting_calling_arg_from_super.star",
+			code: `
+def __str__(self):
+	return self.attr2
+
+MyClass = object("MyClass", attr=0, attr2=1)
+MySubClass = object("MySubClass", __str__, MyClass)
+print(MySubClass())
+					`,
+			want:    []string{`1`},
+			wantErr: false,
+		},
+		{
+			name: "super_str.star",
+			code: `
+def __str__(self):
+	return self.attr2
+
+MyClass = object("MyClass", __str__, attr=0, attr2=1)
+MySubClass = object("MySubClass", MyClass)
+print(MySubClass())
+					`,
+			want:    []string{`1`},
+			wantErr: false,
+		},
+		{
+			name: "str_is_not_a_function.star",
+			code: `
+
+MyClass = object("MyClass", __str__="hello")
+print(MyClass())
+					`,
+			want:    []string{`([__str__])`},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := starlarkHelper(tt.code, tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Object.Attr() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Object.Attr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

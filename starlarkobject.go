@@ -101,12 +101,11 @@ func MakeObject(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		}
 
 		// if an arg is callable, we assume its our super object
-		if callable, ok := item.(starlark.Callable); ok {
-			callableItem, err := callable.CallInternal(thread, args, kwargs)
-			if err != nil {
-				return nil, err
-			}
-			obj.Super = &Super{value: callableItem, super: obj.Super}
+		if objectInit, ok := item.(*objectInit); ok {
+			obj.Super = &Super{value: objectInit.object, super: obj.Super}
+		}
+		if structItem, ok := item.(starlark.HasAttrs); ok {
+			obj.Super = &Super{value: structItem, super: obj.Super}
 		}
 	}
 	for _, kwarg := range kwargs {

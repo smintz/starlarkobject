@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 func ExampleObject() {
@@ -93,6 +94,7 @@ func starlarkHelper(input, filename string) ([]string, starlark.StringDict, erro
 
 	predeclared := starlark.StringDict{
 		"object": starlark.NewBuiltin("object", MakeObject),
+		"struct": starlark.NewBuiltin("struct", starlarkstruct.Make),
 	}
 
 	// Execute a program.
@@ -306,13 +308,45 @@ print("x") if MyClass() else print("y")
 			name: "bool_from_supper.star",
 			code: `
 def __bool__(self):
-	return True
+	return False 
 
 MyClass = object("MyClass", __bool__)
 MySubClass = object("MySubClass", MyClass)
 print("x") if MySubClass() else print("y")
 			`,
 			want:    []string{`y`},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := starlarkHelper(tt.code, tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Object.Attr() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Object.Attr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+func TestObject_Struct(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "extending_struct.star",
+			code: `
+Item = struct(attr="x")
+MyClass = object("MyClass", Item)
+obj = MyClass()
+print(obj.attr)
+			`,
+			want:    []string{`x`},
 			wantErr: false,
 		},
 	}

@@ -56,6 +56,9 @@ func (o *Object) Hash() (uint32, error) {
 }
 
 func (o *Object) Attr(name string) (starlark.Value, error) {
+	if name == "super" {
+		return o.Super.value, nil
+	}
 	if value, ok := o.Members[name]; ok {
 		return value, nil
 	}
@@ -100,12 +103,12 @@ func MakeObject(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 			continue
 		}
 
-		// if an arg is callable, we assume its our super object
+		// if an arg is type of objectInit, we assume its our super object
 		if objectInit, ok := item.(*objectInit); ok {
-			obj.Super = &Super{value: objectInit.object, super: obj.Super}
+			obj.Super.SetSuper(objectInit.object)
 		}
 		if structItem, ok := item.(starlark.HasAttrs); ok {
-			obj.Super = &Super{value: structItem, super: obj.Super}
+			obj.Super.SetSuper(structItem)
 		}
 	}
 	for _, kwarg := range kwargs {
@@ -131,7 +134,7 @@ var _ starlark.Callable = (*function)(nil)
 
 func (fun *function) Name() string          { return fun.name }
 func (fun *function) String() string        { return fun.name }
-func (fun *function) Type() string          { return "symbol" }
+func (fun *function) Type() string          { return "function" }
 func (fun *function) Freeze()               {} // immutable
 func (fun *function) Truth() starlark.Bool  { return starlark.True }
 func (fun *function) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable: %s", fun.Type()) }
@@ -162,6 +165,7 @@ func (ob *objectInit) CallInternal(thread *starlark.Thread, args starlark.Tuple,
 			f.CallInternal(thread, args, kwargs)
 		}
 	}
+	ob.object.Super.Init(thread)
 	return ob.object, nil
 }
 
@@ -276,4 +280,45 @@ func (s *Super) SetField(name string, val starlark.Value) error {
 		}
 		return fmt.Errorf("SetField not implemented for %s", val.Type())
 	})
+}
+
+// Mixin keeps the current value and append other values as `super`
+func (s *Super) Mixin(values ...starlark.Value) *Super {
+	for _, value := range values {
+		s.super = &Super{value: value, super: s}
+	}
+	return s
+}
+
+func (s *Super) SetSuper(value starlark.Value) *Super {
+	if s.value == nil {
+		s.value = value
+		return s
+	}
+	return s.Mixin(value)
+}
+
+func (s *Super) ReplaceSuper(value starlark.Value) *Super {
+	// oldValue := s.value
+	s.value = value
+	// return s.Mixin(oldValue)
+	return s
+}
+func (s *Super) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var returnValue starlark.Value
+	err := s.valueOrSuper(func(v starlark.Value) error {
+		e := fmt.Errorf("%s not callable", v)
+		if callable, ok := v.(starlark.Callable); ok {
+			returnValue, e = callable.CallInternal(thread, args, kwargs)
+		}
+		return e
+	})
+	return returnValue, err
+}
+
+func (s *Super) Init(thread *starlark.Thread) {
+	initialized, err := s.CallInternal(thread, starlark.Tuple{}, []starlark.Tuple{})
+	if err == nil && initialized != nil {
+		s.ReplaceSuper(initialized)
+	}
 }

@@ -6,8 +6,11 @@ import (
 	"reflect"
 	"testing"
 
+	starlarkproto "go.starlark.net/lib/proto"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func ExampleObject() {
@@ -92,7 +95,13 @@ func starlarkHelper(input, filename string) ([]string, starlark.StringDict, erro
 		},
 	}
 
+	pool := protoregistry.GlobalFiles
+	if _, err := pool.FindFileByPath("google/protobuf/any.proto"); err == protoregistry.NotFound {
+		pool.RegisterFile(anypb.File_google_protobuf_any_proto)
+	}
+	starlarkproto.SetPool(thread, pool)
 	predeclared := starlark.StringDict{
+		"proto":  starlarkproto.Module,
 		"object": starlark.NewBuiltin("object", MakeObject),
 		"struct": starlark.NewBuiltin("struct", starlarkstruct.Make),
 	}
@@ -347,6 +356,42 @@ obj = MyClass()
 print(obj.attr)
 			`,
 			want:    []string{`x`},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := starlarkHelper(tt.code, tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Object.Attr() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Object.Attr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestObject_Proto(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "extending_proto.star",
+			code: `
+anypb = proto.file("google/protobuf/any.proto")
+MyClass = object("MyClass", anypb.Any)
+obj = MyClass()
+obj.type_url="hello"
+result = proto.marshal_text(obj.super)
+print(result)
+			`,
+			want: []string{`type_url: "hello"
+`},
 			wantErr: false,
 		},
 	}

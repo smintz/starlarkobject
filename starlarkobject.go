@@ -73,6 +73,13 @@ func (o *Object) SetField(name string, value starlark.Value) error {
 		o.Members[name] = value
 		return nil
 	}
+	if name == "super" {
+		ret := o.Super.ReplaceSuper(value)
+		if ret == nil {
+			return fmt.Errorf("failed to replace super object")
+		}
+		return nil
+	}
 	if current, _ := o.Super.Attr(name); current != nil {
 		return o.Super.SetField(name, value)
 	}
@@ -164,8 +171,9 @@ func (ob *objectInit) CallInternal(thread *starlark.Thread, args starlark.Tuple,
 		if f, isFunc := initFunc.(*function); isFunc {
 			f.CallInternal(thread, args, kwargs)
 		}
+	} else {
+		ob.object.Super.Init(thread, args, kwargs)
 	}
-	ob.object.Super.Init(thread)
 	return ob.object, nil
 }
 
@@ -316,8 +324,8 @@ func (s *Super) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwarg
 	return returnValue, err
 }
 
-func (s *Super) Init(thread *starlark.Thread) {
-	initialized, err := s.CallInternal(thread, starlark.Tuple{}, []starlark.Tuple{})
+func (s *Super) Init(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) {
+	initialized, err := s.CallInternal(thread, args, kwargs)
 	if err == nil && initialized != nil {
 		s.ReplaceSuper(initialized)
 	}

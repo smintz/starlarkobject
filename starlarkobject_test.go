@@ -394,6 +394,36 @@ print(result)
 `},
 			wantErr: false,
 		},
+		{
+			name: "proto_setting_values_init.star",
+			code: `
+def __init__(self):
+	self.super = self.super(type_url="hi")
+	self.type_url="hello"
+
+anypb = proto.file("google/protobuf/any.proto")
+MyClass = object("MyClass", anypb.Any, __init__)
+obj = MyClass()
+result = proto.marshal_text(obj.super)
+print(result)
+			`,
+			want: []string{`type_url: "hello"
+`},
+			wantErr: false,
+		},
+		{
+			name: "init_proto_with_args.star",
+			code: `
+anypb = proto.file("google/protobuf/any.proto")
+MyClass = object("MyClass", anypb.Any)
+obj = MyClass(type_url="hello")
+result = proto.marshal_text(obj.super)
+print(result)
+			`,
+			want: []string{`type_url: "hello"
+`},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
